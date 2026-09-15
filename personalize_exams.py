@@ -11,6 +11,25 @@ HEADER_POS = (447, 25)        # Odd Pages: Top Right Header
 TEST_ID_BOX = (48, 773, 102, 785) # Bottom Left search area
 OUTPUT_FOLDER = "Personalized_Exams"
 
+# Map short course numbers to full course labels used in the red instructor header.
+COURSE_LABELS = {
+    "14": "MATH 1314 College Algebra",
+    "1314": "MATH 1314 College Algebra",
+    "16": "MATH 1316 Trigonometry",
+    "1316": "MATH 1316 Trigonometry",
+    "24": "MATH 1324 Business Math",
+    "1324": "MATH 1324 Business Math",
+    "50": "MATH 1350 Math for Teachers",
+    "1350": "MATH 1350 Math for Teachers",
+    "51": "MATH 1351 Math for Teachers",
+    "1351": "MATH 1351 Math for Teachers",
+}
+
+
+def get_course_label(course_number):
+    course_key = str(course_number).strip()
+    return COURSE_LABELS.get(course_key)
+
 def process_exams(roster_csv, big_pdf_path, pages_per_booklet, instructor_info=None, version_filter=None):
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
@@ -37,9 +56,10 @@ def process_exams(roster_csv, big_pdf_path, pages_per_booklet, instructor_info=N
     total_pages = len(full_pdf)
 
     for index, student in df.iterrows():
-        first = str(student['First_Name']).strip().upper()
-        last = str(student['Last_Name']).strip().upper()
-        stu_id = str(student['ID']).strip()
+        name_parts = str(student['Student']).split(',', 1)
+        last = name_parts[0].strip().upper()
+        first = name_parts[1].strip().upper() if len(name_parts) > 1 else ""
+        stu_id = str(student['SIS User ID']).strip()
         version_label = str(student['Version']).strip()
 
         start_page = index * pages_per_booklet
@@ -92,25 +112,72 @@ def process_exams(roster_csv, big_pdf_path, pages_per_booklet, instructor_info=N
     full_pdf.close()
     pd.DataFrame(updated_rows).to_csv(f"updated_roster_{exam_base_name}.csv", index=False)
 
+
+def split_pdf_by_pages(big_pdf_path, pages_per_booklet):
+    """Split a PDF stack into separate files of a fixed page count, no roster needed."""
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER)
+
+    exam_base_name = os.path.splitext(os.path.basename(big_pdf_path))[0]
+
+    full_pdf = fitz.open(big_pdf_path)
+    total_pages = len(full_pdf)
+
+    booklet_num = 1
+    start_page = 0
+    while start_page < total_pages:
+        end_page = min(start_page + pages_per_booklet, total_pages)
+
+        if end_page - start_page < pages_per_booklet:
+            print(f"!!! Warning: Final booklet only has {end_page - start_page} page(s) (expected {pages_per_booklet}).")
+
+        doc = fitz.open()
+        doc.insert_pdf(full_pdf, from_page=start_page, to_page=end_page - 1)
+
+        new_filename = f"{exam_base_name}-part{booklet_num}.pdf"
+        doc.save(os.path.join(OUTPUT_FOLDER, new_filename))
+        doc.close()
+        print(f"Created: {new_filename}")
+
+        start_page = end_page
+        booklet_num += 1
+
+    full_pdf.close()
+
+
 if __name__ == "__main__":
     print("--- Exam Personalization Tool ---")
-    csv_in = input("1. Roster filename (e.g., roster.csv): ")
-    pdf_in = input("2. PDF stack filename (e.g., Midterm.pdf): ")
+    mode = input("1. Mode - (P)ersonalize with roster or just (S)plit by page count? [P/S]: ").strip().lower()
 
-    try:
-        pg_count = int(input("3. Pages per booklet: "))
-        add_instr = input("4. Add instructor header in red? (yes/no): ").lower()
-        instr_text = None
-        if add_instr == 'yes':
-            math_num = input("   Enter 4-digit MATH number: ")
-            course_name = input("   Enter Course Name: ")
-            instr_text = f"J. Kneisley - MATH {math_num} - {course_name}"
+    if mode == 's':
+        pdf_in = input("2. PDF stack filename (e.g., Midterm.pdf): ")
+        try:
+            pg_count = int(input("3. Pages per booklet: "))
+            split_pdf_by_pages(pdf_in, pg_count)
+        except ValueError:
+            print("Invalid page count. Please enter a whole number.")
+    else:
+        csv_in = input("2. Roster filename (e.g., roster.csv): ")
+        pdf_in = input("3. PDF stack filename (e.g., Midterm.pdf): ")
 
-        # --- New Prompt 5 ---
-        target_version = input("5. Which version is this PDF stack? (e.g., A, B, or Blue): ").strip()
+        try:
+            pg_count = int(input("4. Pages per booklet: "))
+            add_instr = input("5. Add instructor header in red? (yes/no): ").lower()
+            instr_text = None
+            if add_instr == 'yes':
+                course_number = input("   Enter course number (e.g., 14): ")
+                course_label = get_course_label(course_number)
+                if course_label:
+                    instr_text = f"J. Kneisley - {course_label}"
+                else:
+                    course_name = input("   Enter Course Name: ")
+                    instr_text = f"J. Kneisley - MATH {course_number} - {course_name}"
 
-        # Call the function with all the collected info
-        process_exams(csv_in, pdf_in, pg_count, instr_text, target_version)
+            # --- New Prompt 6 ---
+            target_version = input("6. Which version is this PDF stack? (e.g., A, B, or Blue): ").strip()
 
-    except ValueError:
-        print("Invalid page count. Please enter a whole number.")
+            # Call the function with all the collected info
+            process_exams(csv_in, pdf_in, pg_count, instr_text, target_version)
+
+        except ValueError:
+            print("Invalid page count. Please enter a whole number.")
